@@ -2,13 +2,15 @@
 % Release: OCt 25, 2018
 % Update: Nov 7, 2018
 
-function OuterHull(vtk_input, vtk_output)
+function OuterHull(vtk_input, vtk_output,scale_only,scale)
     %% check args
-    if nargin ~= 2
-        fprintf('Usage: OuterHull(vtk_input_surface, vtk_output_hull)\n');
+    if nargin ~= 4
+        fprintf('Usage: OuterHull(vtk_input_surface, vtk_output_hull,scale_only,scale)\n');
         return;
     end
-    
+    if scale == -1
+        scale=256;
+    end
     %% ensure types
     assert(isa(vtk_input, 'char'))
     assert(isa(vtk_output, 'char'))
@@ -17,37 +19,39 @@ function OuterHull(vtk_input, vtk_output)
     fprintf('read vtk: %s\n', vtk_input);
     [v,f] = read_vtk(vtk_input);
     vox = max(v)-min(v);
-    vox = ceil(vox / max(vox) * 256);
+    vox = ceil(vox / max(vox) * scale);
     
     %% voxelize mesh using Aitkenhead's tool 
     fprintf('voxelization.. ');
     fv = struct('vertices', v, 'faces', f+1);
-    [volume,x,y,z] = VOXELISE(vox(1), vox(2), vox(3), fv, 'xyz');
+    [volume,x,y,z] = VOXELISE(vox(1), vox(2), vox(3), fv, 'y');
     volume = padarray(volume, [20, 20, 20]);
-    volume = imfill(volume, 26, 'holes');
+    %volume = imfill(volume, 26, 'holes');
     fprintf('done\n');
-
+    
     %% morphological closing
     % convert to double type
     fprintf('morphological closing.. ');
     volume = double(volume);
-    volume(volume == 1) = 255;
+    volume(volume == 1) = scale-1;
 
-    % Guassian smoothing to sufficiently envelop the mesh
-    sd = 2;
-    volume = smooth3(volume,'gaussian',2*ceil(2*sd)+1,sd);
+    %% Guassian smoothing to sufficiently envelop the mesh
+    if ~scale_only
+        sd = 15;
+        volume = smooth3(volume,'gaussian',2*ceil(2*sd)+1,ceil(sd*0.5));
+        %volume(1:29,15:55,7:28)=80;
+        %% Closing operation
+        se = strel('ball', 15, 1);
+        volume = imclose(volume, se);
 
-    % Closing operation
-    se = strel('ball', 15, 15);
-    volume = imclose(volume, se);
+        % Dilation operation
+        se = strel('ball', 5, 1);
+        volume = imdilate(volume, se);
 
-    % Dilation operation
-    se = strel('ball', 1, 1);
-    volume = imdilate(volume, se);
-
-    % conversion to binary volume
-    volume = double(volume > 25) * 255;
-    fprintf('done\n');
+        % conversion to binary volume
+        volume = double(volume > 30) * (scale-1);
+        fprintf('done\n');
+    end
 
     %% outer hull
     % Iso-surface generation
@@ -59,8 +63,10 @@ function OuterHull(vtk_input, vtk_output)
     v2 = v2 + repmat(-min(v2), size(v1,1), 1);  % translation to the origin
     v2 = v2 .* repmat((max([max(x) max(y) max(z);max(v)])-min([min(x) min(y) min(z);min(v)]))./max(v2),size(v1,1),1);   % scaling
     v2 = v2 + repmat(min([min(x) min(y) min(z);min(v)]) + [0.5 0 -0.5], size(v1,1),1);  % origin adjustment
-    v2 = v2 * 1.02; % ensure full converage
-    
+    if ~scale_only
+        v2 = v2 * 1.03; % ensure full converage
+    end
+        
     % largest connected component
     A = adjacency(f1);
     [p,~,r] = dmperm(A'+speye(size(A)));
@@ -89,7 +95,10 @@ function OuterHull(vtk_input, vtk_output)
 
     % write output
     fprintf('write vtk: %s\n', vtk_output);
+    %v4=v4-[0.5 0 0];
+
     write_vtk(vtk_output, v4, f3 - 1);
+    %write_vtk(vtk_output, v4, new_f-1);
 end
 
 function A = adjacency(f)
